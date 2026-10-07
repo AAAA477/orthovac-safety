@@ -42,3 +42,11 @@ def test_merge_and_sync_are_guarded_by_run_merge():
         if 'ov.merge_summaries' in line or 'ov.sync_status' in line:
             assert line.startswith(' ')
     assert any('RUN_MERGE = SHARD == 0' in s for s in code_cells())
+
+
+def test_the_install_ref_is_a_setting_defined_before_the_install_cell():
+    cells = code_cells()
+    install = next(i for i, s in enumerate(cells) if s.startswith('!pip install'))
+    setting = next(i for i, s in enumerate(cells) if 'PACKAGE_REF =' in s)
+    assert setting < install, 'PACKAGE_REF must be defined before the pip install cell uses it'
+    assert '@{PACKAGE_REF}' in cells[install]

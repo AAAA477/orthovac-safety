@@ -9,14 +9,16 @@ CELLS = [
     md("# Safety projection on Colab\n\n"
        "Run the cells in order. The plan comes from the To_Do file(s) named below, in task-id order. "
        "To run two sessions at once, give each its own `SHARD` (0 and 1) and set `NUM_SHARDS = 2` in both. "
-       "Each session must use a different `SHARD`; only the `SHARD = 0` session merges and syncs."),
-    code("!pip install -q \"git+https://github.com/AAAA477/orthovac-safety.git\""),
+       "Each session must use a different `SHARD`; only the `SHARD = 0` session merges and syncs. "
+       "`PACKAGE_REF` is the branch the package installs from: change it to `main` once PR #1 is merged."),
     code("#@title Settings { display-mode: \"form\" }\n"
+         "PACKAGE_REF = 'build/orthovac-package'   # change to 'main' once PR #1 is merged\n"
          "SIDE = 'Qwen'\n"
          "TODO_PATHS = ['/content/drive/MyDrive/Safety-projections/Qwen/Qwen_Experiment_To_Do.json']\n"
          "SHARD, NUM_SHARDS = 0, 1   # each session must use a different SHARD\n"
          "RUN_UPLOAD = True\n"
          "RUN_MERGE = SHARD == 0   # only ONE session merges and syncs, after every shard has finished"),
+    code("!pip install -q \"git+https://github.com/AAAA477/orthovac-safety.git@{PACKAGE_REF}\""),
     code("import orthovac as ov\n\n"
          "cfg = ov.setup(side=SIDE, todo_paths=TODO_PATHS, shard=SHARD, num_shards=NUM_SHARDS)\n"
          "ov.harden_judge()          # judge retries; a quota failure stops the run with a clear message\n"
