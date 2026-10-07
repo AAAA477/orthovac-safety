@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orthovac"
+version = "0.1.0"
+description = "Build, evaluate and plot vaccinated LoRA adapters (safety projection)"
+requires-python = ">=3.10"
+dependencies = ["pandas", "numpy", "matplotlib"]
+
+[project.optional-dependencies]
+test = ["pytest", "pyflakes"]
+
+[tool.setuptools.packages.find]
+include = ["orthovac*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
