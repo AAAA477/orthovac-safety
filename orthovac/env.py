@@ -25,9 +25,16 @@ class DriveNotMounted(RuntimeError):
 
 
 def in_colab() -> bool:
+    """True on a Colab VM. Several independent signals, because a wrong "no" silently skips the Drive
+    mount and sends results to the VM's temporary disk."""
+    if os.environ.get('COLAB_RELEASE_TAG') or 'COLAB_GPU' in os.environ:
+        return True
+    if sys.platform.startswith('linux') and Path('/content').is_dir():
+        return True
     try:
-        return importlib.util.find_spec('google.colab') is not None
-    except (ImportError, ValueError):
+        importlib.import_module('google.colab')
+        return True
+    except Exception:
         return False
 
 

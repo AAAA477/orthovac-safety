@@ -1,5 +1,6 @@
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -63,3 +64,40 @@ def test_import_never_loads_heavy_libraries():
             "print(bad); sys.exit(1 if bad else 0)")
     r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_in_colab_trusts_independent_signals(monkeypatch):
+    monkeypatch.delenv('COLAB_GPU', raising=False)
+    monkeypatch.delenv('COLAB_RELEASE_TAG', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'win32')              # a laptop: the /content folder check is skipped
+    assert env.in_colab() is False
+    monkeypatch.setenv('COLAB_GPU', '1')
+    assert env.in_colab() is True
+    monkeypatch.delenv('COLAB_GPU')
+    monkeypatch.setenv('COLAB_RELEASE_TAG', 'release-colab_20250101')
+    assert env.in_colab() is True
+
+
+def test_describe_says_where_a_local_run_is_stored(cfg):
+    text = cfg.describe()
+    assert 'Where everything is stored' in text and 'LOCAL folder' in text
+    assert str(cfg.runs_root) in text and str(cfg.summary_file) in text and str(cfg.log_file) in text
+    assert 'NOT FOUND' in text                                  # the To_Do file does not exist in the fixture
+    assert str(cfg.local_adapter_base) in text and 'wiped when the session ends' in text
+
+
+def test_describe_names_the_drive_folder_to_open(tmp_path):
+    cfg = Config(side='Qwen', root=Path('/content/drive/MyDrive/Safety-projections/Qwen'), todo_paths=(),
+                 summary_dir=tmp_path)
+    text = cfg.describe()
+    assert 'My Drive/Safety-projections/Qwen' in text and 'Google Drive' in text
+    assert 'NOT MOUNTED' in text                                # no Drive on the test machine
+
+
+def test_setup_prints_the_storage_map_unless_quiet(tmp_path, capsys):
+    kw = dict(side='Qwen', root=tmp_path / 'r', colab=False, local_adapter_base=tmp_path / 'a',
+              local_responses=tmp_path / 'b')
+    setup(**kw)
+    assert 'Where everything is stored' in capsys.readouterr().out
+    setup(verbose=False, **kw)
+    assert capsys.readouterr().out == ''

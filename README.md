@@ -15,6 +15,14 @@ set `TODO_PATHS` in the settings cell, and run the cells in order:
 The plan is read only from the To_Do file(s) in `TODO_PATHS`, in task-id order. The read is verified and printed;
 a missing file, bad JSON, or no open tasks stops the run.
 
+## Where your data is stored
+
+On Colab everything goes to Google Drive under `My Drive/Safety-projections/<side>/`: evaluation CSVs in
+`runs/<donor>/<strength>/results/`, baselines in `runs/_baselines/`, summaries as `<SIDE>_SUMMARY.csv` (merged) and
+`<SIDE>_SUMMARY.shard<i>.csv` (one per session), the event log in `runs/_log/`, graphs in `runs/_figures/`.
+`setup()` prints the exact paths and says whether Drive is mounted. The notebook mounts Drive in its own cell. The Colab
+VM's own disk (adapters being built, raw responses) is temporary; every finished result is copied to Drive.
+
 ## Two sessions at once
 
 Open the notebook in two Colab sessions. Set `NUM_SHARDS = 2` in both, `SHARD = 0` in one and `SHARD = 1` in the

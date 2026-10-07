@@ -44,6 +44,18 @@ def test_merge_and_sync_are_guarded_by_run_merge():
     assert any('RUN_MERGE = SHARD == 0' in s for s in code_cells())
 
 
+def test_drive_is_mounted_explicitly_before_setup():
+    cells = code_cells()
+    mount = next(i for i, s in enumerate(cells) if "drive.mount('/content/drive')" in s)
+    setup = next(i for i, s in enumerate(cells) if 'ov.setup(' in s)
+    assert mount < setup
+
+
+def test_the_intro_says_where_data_is_stored():
+    first = nbformat.read(NB, as_version=4).cells[0].source
+    assert 'Safety-projections' in first and 'Google Drive' in first
+
+
 def test_the_install_ref_is_a_setting_defined_before_the_install_cell():
     cells = code_cells()
     install = next(i for i, s in enumerate(cells) if s.startswith('!pip install'))

@@ -88,12 +88,40 @@ class Config:
     def log_file(self) -> Path:
         return self.log_dir / f'shard{self.shard}.jsonl'
 
+    def describe(self) -> str:
+        """A plain-language map of where everything is stored (printed by setup())."""
+        on_drive = DRIVE_ROOT in self.root.parents or self.root == DRIVE_ROOT
+        mounted = DRIVE_ROOT.is_dir()
+        if on_drive:
+            where = f'Google Drive: {"mounted" if mounted else "NOT MOUNTED"} -> in Drive, open "My Drive/'                     f'{self.root.relative_to(DRIVE_ROOT).as_posix()}"'
+        else:
+            where = 'NOT Google Drive: this is a LOCAL folder (on Colab it is wiped when the session ends)'
+        lines = [
+            'Where everything is stored',
+            f'  {where}',
+            f'  results root       : {self.root}',
+            f'  evaluation CSVs    : {self.runs_root}/<donor>/<strength>/results/',
+            f'  baselines          : {self.baseline_dir}',
+            f'  summary (merged)   : {self.summary_file}',
+            f'  summary (this run) : {self.shard_summary_file()}   [session {self.shard + 1} of {self.num_shards}]',
+            f'  event log          : {self.log_file}',
+            f'  figures            : {self.results_dir}',
+        ]
+        for p in self.todo_paths:
+            lines.append(f'  To_Do file         : {p}   [{"found" if Path(p).exists() else "NOT FOUND"}]')
+        lines += ['  Temporary on the VM (gone when the Colab session ends; every finished result is copied to the',
+                  'results root above):',
+                  f'    adapters         : {self.local_adapter_base}',
+                  f'    raw responses    : {self.local_responses}']
+        return '\n'.join(lines)
 
-def setup(side='Qwen', root=None, todo_paths=(), summary_dir=None, colab=None, **overrides) -> Config:
+
+def setup(side='Qwen', root=None, todo_paths=(), summary_dir=None, colab=None, verbose=True, **overrides) -> Config:
     """Build the Config, create its directories and, on Colab, prepare the machine.
 
     root defaults to Drive's Safety-projections/<side> on Colab and ./Safety-projections/<side> elsewhere.
     Any other Config field can be passed as a keyword (shard=1, num_shards=2, ...).
+    verbose=True prints where everything is stored.
     """
     from . import env
     colab = env.in_colab() if colab is None else colab
@@ -110,4 +138,6 @@ def setup(side='Qwen', root=None, todo_paths=(), summary_dir=None, colab=None, *
     for d in (cfg.runs_root, cfg.baseline_dir, cfg.results_dir, cfg.log_dir, cfg.summary_dir,
               cfg.local_adapter_base, cfg.local_responses):
         d.mkdir(parents=True, exist_ok=True)
+    if verbose:
+        print(cfg.describe())
     return cfg

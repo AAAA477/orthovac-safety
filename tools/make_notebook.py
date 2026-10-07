@@ -10,7 +10,10 @@ CELLS = [
        "Run the cells in order. The plan comes from the To_Do file(s) named below, in task-id order. "
        "To run two sessions at once, give each its own `SHARD` (0 and 1) and set `NUM_SHARDS = 2` in both. "
        "Each session must use a different `SHARD`; only the `SHARD = 0` session merges and syncs. "
-       "`PACKAGE_REF` is the branch the package installs from: change it to `main` once PR #1 is merged."),
+       "`PACKAGE_REF` is the branch the package installs from: change it to `main` once PR #1 is merged.\n\n"
+       "**Where your data goes:** Google Drive, in `My Drive/Safety-projections/<SIDE>/` (evaluation CSVs under "
+       "`runs/`, summaries as `<SIDE>_SUMMARY*.csv`, event log under `runs/_log/`, graphs under `runs/_figures/`). "
+       "The setup cell prints the exact paths. Anything on the Colab VM itself is temporary."),
     code("#@title Settings { display-mode: \"form\" }\n"
          "PACKAGE_REF = 'build/orthovac-package'   # change to 'main' once PR #1 is merged\n"
          "SIDE = 'Qwen'\n"
@@ -18,6 +21,9 @@ CELLS = [
          "SHARD, NUM_SHARDS = 0, 1   # each session must use a different SHARD\n"
          "RUN_UPLOAD = True\n"
          "RUN_MERGE = SHARD == 0   # only ONE session merges and syncs, after every shard has finished"),
+    code("# Mount Google Drive first: all results are stored there. Approve the pop-up.\n"
+         "from google.colab import drive\n"
+         "drive.mount('/content/drive')"),
     code("!pip install -q \"git+https://github.com/AAAA477/orthovac-safety.git@{PACKAGE_REF}\""),
     code("import orthovac as ov\n\n"
          "cfg = ov.setup(side=SIDE, todo_paths=TODO_PATHS, shard=SHARD, num_shards=NUM_SHARDS)\n"
