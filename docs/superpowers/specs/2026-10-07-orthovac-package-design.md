@@ -128,3 +128,15 @@ two score columns.
   fails loudly if they differ.
 - Hash sharding gives even load on average, not exactly equal shards.
 - The To_Do JSON statuses on Drive are currently stale; the plan checks disk, not statuses, for what is complete.
+
+## Deferred optimisations (not in this build)
+
+Decision: no speed changes until a real run has succeeded on Colab, so nothing differs from the notebook's current
+behaviour except the fixes above. Candidates, each to be enabled alone behind an off-by-default setting, with its own
+verification, after timing data from a real run:
+
+1. Parallel judging with a concurrency cap (needs the user's OpenAI rate-limit tier).
+2. Load the base model once and swap LoRA adapters (verify equal greedy output on a fixed prompt).
+3. Overlap judging of adapter N with generation of adapter N+1.
+4. Upload adapters after evaluation instead of before it.
+5. Faster generation (batching / vLLM with LoRA), after checking how `get_responses` batches today.
