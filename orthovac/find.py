@@ -36,43 +36,53 @@ def _is_vm(path: Path) -> bool:
     return s.startswith('/content/') and not s.startswith('/content/drive')
 
 
+def _candidates(roots) -> list:
+    """Every eval CSV under the roots, once per file name: a Drive copy always beats a VM copy of the same name."""
+    chosen, resolved = {}, set()
+    for root in dict.fromkeys(Path(r).resolve() for r in roots):    # overlapping roots are scanned once
+        if not root.exists():
+            continue
+        for p in sorted(root.rglob('*_eval-*.csv')):
+            if p.resolve() in resolved:
+                continue
+            resolved.add(p.resolve())
+            old = chosen.get(p.name)
+            if old is None or (_is_vm(old) and not _is_vm(p)):
+                chosen[p.name] = p
+    return list(chosen.values())
+
+
 def scan(cfg, roots, since_days=None) -> pd.DataFrame:
     """One row per eval CSV found under `roots`, with its state and mean scores."""
     cutoff = time.time() - since_days * 86400 if since_days else 0
     metrics = list(cfg.metrics)
-    seen, rows = set(), []
-    for root in map(Path, roots):
-        if not root.exists():
+    rows = []
+    for p in _candidates(roots):
+        on_vm = _is_vm(p)
+        info = parse_name(p)
+        if info is None or p.stat().st_mtime < cutoff:
             continue
-        for p in root.rglob('*_eval-*.csv'):
-            on_vm = _is_vm(p)
-            if p.name in seen and on_vm:            # a VM copy of a file already found on Drive
-                continue
-            info = parse_name(p)
-            if info is None or p.stat().st_mtime < cutoff:
-                continue
-            base = dict(info, file=p.name, path=str(p), on_vm=on_vm,
-                        modified=time.strftime('%Y-%m-%d %H:%M', time.localtime(p.stat().st_mtime)))
-            try:
-                df = pd.read_csv(p)
-            except Exception as e:
-                rows.append(dict(base, state=f'unreadable: {type(e).__name__}'))
-                continue
-            for m in metrics:
-                if m in df.columns:
-                    df[m] = pd.to_numeric(df[m], errors='coerce')
-            if 'question_id' in df.columns:
-                df = df[~df['question_id'].astype(str).str.contains('json|template', case=False, na=False)]
-            row = dict(base, n=len(df), state=state_of(df, metrics, cfg.expected_rows))
-            for m in metrics:
-                row[m] = df[m].mean() if m in df.columns and df[m].notna().any() else np.nan
-            both = (df.dropna(subset=['aligned', 'coherent'])
-                    if {'aligned', 'coherent'} <= set(df.columns) else df.iloc[0:0])
-            row['misaligned_pct'] = (100 * ((both['aligned'] <= cfg.aligned_cutoff)
-                                            & (both['coherent'] > cfg.coherent_cutoff)).mean()
-                                     if len(both) else np.nan)
-            rows.append(row)
-            seen.add(p.name)
+        base = dict(info, file=p.name, path=str(p), on_vm=on_vm,
+                    modified=time.strftime('%Y-%m-%d %H:%M', time.localtime(p.stat().st_mtime)))
+        try:
+            df = pd.read_csv(p)
+        except Exception as e:
+            rows.append(dict(base, state=f'unreadable: {type(e).__name__}'))
+            continue
+        for m in metrics:
+            if m in df.columns:
+                df[m] = pd.to_numeric(df[m], errors='coerce')
+        if 'question_id' in df.columns:
+            df = df[~df['question_id'].astype(str).str.contains('json|template', case=False, na=False)]
+        row = dict(base, n=len(df), state=state_of(df, metrics, cfg.expected_rows))
+        for m in metrics:
+            row[m] = df[m].mean() if m in df.columns and df[m].notna().any() else np.nan
+        both = (df.dropna(subset=['aligned', 'coherent'])
+                if {'aligned', 'coherent'} <= set(df.columns) else df.iloc[0:0])
+        row['misaligned_pct'] = (100 * ((both['aligned'] <= cfg.aligned_cutoff)
+                                        & (both['coherent'] > cfg.coherent_cutoff)).mean()
+                                 if len(both) else np.nan)
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
