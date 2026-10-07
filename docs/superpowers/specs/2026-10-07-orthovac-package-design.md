@@ -1,0 +1,130 @@
+# orthovac: package design
+
+Date: 2026-10-07. Status: approved in conversation, awaiting written-spec review.
+
+## Goal
+
+Move the logic of `safety_projection_v3.ipynb` into a Python package, `orthovac`, that lives in this repo and is
+installed on Colab with `pip install git+https://github.com/AAAA477/orthovac-safety`. The Colab notebook becomes a
+thin file of ~6 cells that call functions. One call, `setup(...)`, sets every directory and knob; all other
+functions take the returned `Config`.
+
+Success looks like:
+- The work to run is read from To_Do JSON file(s) whose paths the user sets, verified on read, ordered by task id.
+- Two Colab sessions can run at the same time without writing the same file or evaluating the same run.
+- Only `aligned` and `coherent` are scored. Refusal is off.
+- Nothing is written under `orthovac_runs`. Results and summaries go under `Safety-projections`.
+- A judge failure (rate limit, quota, timeout) is retried and, if it persists, reported loudly. It never silently
+  becomes a blank score.
+- Importing `orthovac` never triggers the Colab torch/torchao import error.
+- The pure logic is tested on a laptop with no GPU.
+
+Non-goals (this version): changing the projection method, the question set, or the judge model; the cross-model
+section (kept, off by default).
+
+## Layout
+
+```
+orthovac/
+  config.py     Config dataclass + setup()
+  env.py        Drive mount check, installs, ensure_torchao(), API keys; torch/transformers imported lazily
+  tasks.py      load_todo_files (verify), task-id order, run matrix, shard filter, plan, sync_status
+  adapters.py   projection math, build, save, stage locally
+  hub.py        Hugging Face upload / download
+  evaluate.py   eval_one, judge retries, post-judge completeness check
+  summary.py    per-shard summary files, atomic writes, merge
+  find.py       result finder (from find_results.ipynb)
+  plots.py      line graphs (from line_graphs.py), dose-response, heatmap
+  cross.py      cross-model section, off by default
+notebooks/run_colab.ipynb
+tests/
+```
+
+## Public interface
+
+```python
+import orthovac as ov
+cfg = ov.setup(
+    side='Qwen',                                   # 'Qwen' | 'Llama'
+    root='/content/drive/MyDrive/Safety-projections/Qwen',
+    todo_paths=['.../Qwen_Experiment_To_Do.json'], # the plan comes from these only
+    shard=0, num_shards=2,
+    metrics=('aligned', 'coherent'),
+    hf_namespace=None,                             # default: the token owner
+)
+ov.show_plan(cfg)            # verified To_Do read + ordered table of what is left
+ov.build_adapters(cfg)       # this shard's runs only
+ov.upload_adapters(cfg)
+ov.run_evals(cfg)            # resumable; skips finished work
+ov.merge_summaries(cfg)      # run once, after all shards finish
+ov.sync_status(cfg)          # run once; the only writer of the To_Do JSON
+ov.plots.plot_all_line_graphs(cfg)
+ov.find.find_results(cfg)
+```
+
+`Config` holds: `runs_root = root/'runs'`, `summary_dir`, `todo_paths`, shard, metrics, namespace, eval settings.
+Every path comes from it. `setup()` mounts Drive on Colab, stops if Drive is not mounted, and calls `ensure_torchao()`
+before anything imports torch/transformers/peft.
+
+## Tasks and ordering
+
+`load_todo_files` reads each file and prints path, size, schema, task count, and counts by status and category.
+It raises on: missing file, invalid JSON, no `tasks` list, tasks lacking `task_id` or `category`, or zero open
+projection tasks. Files run in the order given; tasks within a file by numeric task id; tasks on the same
+(donor, organism) pair merge (union of strengths, all task ids). `show_plan` lists what is left per pair and
+separately what is already complete on disk.
+
+## Concurrency and sharding
+
+- A run belongs to shard `zlib.crc32(run_name) % num_shards` (stable across Python processes; not `hash()`).
+  A session builds, uploads and evaluates only its own runs.
+- Baselines are owned by the shard that owns that target. A lambda=0 run reuses its target's baseline CSV and
+  waits (skips this pass) until that file exists.
+- Each shard writes only its own summary file, `<SIDE>_SUMMARY.shard<i>.csv`, via temp file + atomic replace.
+  `merge_summaries` builds `<SIDE>_SUMMARY.csv`; on a clash the newest row per (source, target, strength) wins.
+- Only `sync_status` writes the To_Do JSON, after the merge. Shards never write it.
+
+## Judge (findings from the em_organism_dir repo)
+
+`judge_csv_file` calls gpt-4o one request at a time (`batch_size=1`) with `max_retries = 1`; any exception is
+printed and the score is stored as `None`. So the judge is already serial, and a rate limit, an exhausted quota or a
+timeout produces blank scores without stopping the run.
+
+Therefore:
+- No concurrency cap is needed (two sessions means at most two concurrent requests).
+- `evaluate.py` replaces the OpenAI client used by the judge with one that has a higher `max_retries` and a timeout,
+  and wraps the judge call to retry with backoff on rate limit / connection / timeout errors. A quota-exhausted
+  error fails fast with a clear message instead of retrying.
+- After judging, `evaluate.py` re-reads the CSV. Missing scores raise `JudgeIncomplete` (listing the file and counts);
+  the row is marked `unjudged` in the summary. `rejudge_unjudged(cfg)` repairs those files with no regeneration.
+- The em_organism_dir repo is not modified; behaviour is changed from outside.
+
+## Errors
+
+- Drive not mounted: `setup()` raises.
+- Drive copy of a result fails: retry 3 times, keep the local file, then raise.
+- Summary write fails: raise (no silent `print`).
+- To_Do problems: raise as listed above.
+
+## Testing
+
+pytest on a laptop for: To_Do loading and verification, ordering and merging, shard assignment (disjoint, complete,
+stable), summary atomic write and merge, finder classification, plot functions (smoke + settings overrides).
+GPU-dependent code (build, eval) is covered by the notebook gate: one adapter evaluated, output checked for exactly the
+two score columns.
+
+## Migration
+
+1. Create the package from the current notebook code, function by function, keeping behaviour except where this spec
+   changes it.
+2. `notebooks/run_colab.ipynb` replaces the current notebooks as the entry point; old notebooks stay under
+   `notebooks/legacy/` until the new one has completed a real run.
+3. Existing results under `orthovac_runs/safety_projection_v2/` are moved by the user to `Safety-projections/Qwen/runs/`;
+   summary `result_csv` paths are rewritten by a one-off helper.
+
+## Risks and open assumptions
+
+- The judge retry wrapper depends on the repo's `judge_azure.client` / `OpenAiJudge` names; a version check at import
+  fails loudly if they differ.
+- Hash sharding gives even load on average, not exactly equal shards.
+- The To_Do JSON statuses on Drive are currently stale; the plan checks disk, not statuses, for what is complete.
