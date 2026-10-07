@@ -19,8 +19,9 @@ Success looks like:
 - Importing `orthovac` never triggers the Colab torch/torchao import error.
 - The pure logic is tested on a laptop with no GPU.
 
-Non-goals (this version): changing the projection method, the question set, or the judge model; the cross-model
-section (kept, off by default).
+Non-goals (this version): changing the projection method, the question set, or the judge model; porting the
+dose-response plot, the metric heatmap, the results audit tables and the cross-model section (all stay in
+`notebooks/legacy/safety_projection_v3.ipynb` until a later build).
 
 ## Layout
 
@@ -34,8 +35,7 @@ orthovac/
   evaluate.py   eval_one, judge retries, post-judge completeness check
   summary.py    per-shard summary files, atomic writes, merge
   find.py       result finder (from find_results.ipynb)
-  plots.py      line graphs (from line_graphs.py), dose-response, heatmap
-  cross.py      cross-model section, off by default
+  plots.py      line graphs (from line_graphs.py)
 notebooks/run_colab.ipynb
 tests/
 ```
@@ -58,7 +58,7 @@ ov.upload_adapters(cfg)
 ov.run_evals(cfg)            # resumable; skips finished work
 ov.merge_summaries(cfg)      # run once, after all shards finish
 ov.sync_status(cfg)          # run once; the only writer of the To_Do JSON
-ov.plots.plot_all_line_graphs(cfg)
+ov.plots.plot_all_line_graphs(cfg, df)
 ov.find.find_results(cfg)
 ```
 
@@ -98,6 +98,21 @@ Therefore:
 - After judging, `evaluate.py` re-reads the CSV. Missing scores raise `JudgeIncomplete` (listing the file and counts);
   the row is marked `unjudged` in the summary. `rejudge_unjudged(cfg)` repairs those files with no regeneration.
 - The em_organism_dir repo is not modified; behaviour is changed from outside.
+
+## Save after every eval
+
+No finished eval may exist only in memory or only on the Colab VM. After each eval, in this order:
+
+1. **Verified copy to Drive.** Copy the local CSV to its Drive path via a temp name + atomic replace, `fsync`, then
+   compare size and SHA-256 of source and destination. Retry 3 times; on failure keep the local file, write an event,
+   and raise `DriveCopyError` (the run stops, nothing is lost).
+2. **Shard summary row.** Upsert this run's row into `<SIDE>_SUMMARY.shard<i>.csv` (atomic replace). Raises on failure.
+3. **Event log line.** Append one JSON line (run name, status, paths, scores, UTC time) to
+   `runs/_log/shard<i>.jsonl`, flushed and `fsync`ed. Best effort: a failure prints a warning and does not undo 1 and 2.
+
+Only after step 3 does the runner start the next eval. A crash or disconnect therefore loses at most the eval in
+progress. At the start of every run, `recover_local(cfg)` re-copies any complete CSV left on the VM by an earlier
+failed copy. Adapters are saved on build; a build is never held only in memory.
 
 ## Errors
 
