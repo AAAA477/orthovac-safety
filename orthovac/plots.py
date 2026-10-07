@@ -1,4 +1,4 @@
-# --- Results 3/3: line graphs - by donor -> target kind, and one panel per donor -------------
+"""Line graphs - by donor -> target kind, and one panel per donor."""
 # Input: a summary table with columns source, target, strength, alignment, coherence, status
 # (QWEN_SUMMARY.csv / LLAMA_SUMMARY.csv). Rows with source '_baseline' are each organism's own score.
 # Everything you may want to change is in LINE_CFG; edit it in the settings cell, or pass overrides:
@@ -254,3 +254,10 @@ def plot_all_line_graphs(df, out_dir, show=True, **over):
                 n += 1
                 plt.show() if show else plt.close(fig)
     print(f'{n} figure(s) written to {out_dir}  ({", ".join(c["formats"])})')
+
+
+def line_graphs(cfg, df=None, show=True, **over):
+    """Draw every line graph for cfg.side from its merged summary (or from `df`) into results_dir."""
+    from .summary import read_summary
+    df = read_summary(cfg.summary_file) if df is None else df
+    return plot_all_line_graphs(df, cfg.results_dir / f'line_graphs_{cfg.side}', show=show, **over)
