@@ -217,3 +217,9 @@ def test_a_leftover_temp_file_from_a_disconnect_is_overwritten(tmp_path):
     (tmp_path / 'dst.csv.tmp').write_bytes(b'half a file')
     durable.verified_copy(src, dst)
     assert durable.sha256(dst) == durable.sha256(src) and not (tmp_path / 'dst.csv.tmp').exists()
+
+
+def test_harden_judge_defaults_fail_fast():
+    import inspect
+    sig = inspect.signature(judge.harden_judge)
+    assert sig.parameters['max_retries'].default == 2 and sig.parameters['timeout'].default == 30.0

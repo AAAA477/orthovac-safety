@@ -136,8 +136,11 @@ def check_scored(cfg, path):
         raise JudgeIncomplete(f'{path}: state={state}; answered rows without a score: {detail}')
 
 
-def harden_judge(max_retries=6, timeout=60.0, attempts=3):
-    """Give the em_organism_dir judge a retrying client and a retry/fail-fast wrapper. Idempotent."""
+def harden_judge(max_retries=2, timeout=30.0, attempts=3):
+    """Give the em_organism_dir judge a retrying client and a retry/fail-fast wrapper. Idempotent.
+
+    Defaults are short on purpose: an outage must not stall one call for ~20 minutes with the GPU idle.
+    """
     import em_organism_dir.eval.util.judge_azure as ja
     judge_cls = getattr(ja, 'OpenAiJudge', None)
     if judge_cls is None or not hasattr(judge_cls, 'logprob_probs') or not hasattr(ja, 'client'):

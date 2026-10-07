@@ -28,3 +28,17 @@ def test_the_notebook_installs_from_the_repo_and_sets_the_todo_paths():
     text = '\n'.join(code_cells())
     assert 'AAAA477/orthovac-safety' in text and 'TODO_PATHS' in text and 'NUM_SHARDS' in text
     assert 'orthovac_runs' not in text
+
+
+def test_gate_uses_the_evaluated_list():
+    gate = next(s for s in code_cells() if 'limit=1' in s)
+    assert 'evaluated=' in gate and 'rglob' not in gate
+
+
+def test_merge_and_sync_are_guarded_by_run_merge():
+    cell = next(s for s in code_cells() if 'merge_summaries' in s)
+    assert 'if RUN_MERGE:' in cell
+    for line in cell.splitlines():
+        if 'ov.merge_summaries' in line or 'ov.sync_status' in line:
+            assert line.startswith(' ')
+    assert any('RUN_MERGE = SHARD == 0' in s for s in code_cells())

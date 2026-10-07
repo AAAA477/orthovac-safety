@@ -233,3 +233,187 @@ def test_zero_strength_already_complete_is_recorded_and_run_done_sees_baseline(c
     waiting = run_with(cfg, plan, FakeEval(), lambda c, r: 'ref')
     assert zero['run_name'] not in waiting
     assert str(zero['result_csv']) in shard_rows(cfg)['result_csv'].tolist()
+
+
+# ---- final fix wave -------------------------------------------------------------------------------
+class FakeRejudge:
+    """Stands in for evaluate.rejudge: fills the scores of a local CSV (or leaves it unjudged)."""
+
+    def __init__(self, fill=True):
+        self.calls, self.fill = [], fill
+
+    async def __call__(self, cfg, path):
+        self.calls.append(Path(path).name)
+        if self.fill:
+            make_csv(path)
+
+
+def run_full(cfg, plan, ev, rejudge_fn, **kw):
+    return asyncio.run(runner.run_evals(cfg, plan, eval_fn=ev, ref_fn=lambda c, r: 'ref',
+                                        reuse_fn=lambda c, r: None, rejudge_fn=rejudge_fn,
+                                        out=lambda *a: None, **kw))
+
+
+def a_run(plan, strength=0.5):
+    return next(r for r in plan.matrix if float(r['strength']) == strength)
+
+
+def test_evaluated_receives_exactly_the_evaluated_paths(cfg, plan, monkeypatch):
+    monkeypatch.setattr('orthovac.evaluate._model_stats', fake_stats)
+    done_rec = a_run(plan)
+    make_csv(done_rec['result_csv'])                            # complete already: not evaluated
+    ev, done = FakeEval(), []
+    waiting = run_full(cfg, plan, ev, FakeRejudge(), evaluated=done)
+    assert len(done) == len(ev.calls) and done
+    assert str(done_rec['result_csv']) not in done
+    assert all(Path(p).exists() for p in done)
+    assert isinstance(waiting, list)
+
+
+def test_unjudged_drive_csv_is_rejudged_never_regenerated(cfg, plan, monkeypatch):
+    monkeypatch.setattr('orthovac.evaluate._model_stats', fake_stats)
+    rec = a_run(plan)
+    make_csv(rec['result_csv'], scored=False)
+    ev, rj, done = FakeEval(), FakeRejudge(), []
+    run_full(cfg, plan, ev, rj, evaluated=done)
+    name = Path(rec['result_csv']).name
+    assert rj.calls == [name] and rec['run_name'] not in ev.calls
+    assert str(rec['result_csv']) in done
+    assert judge.csv_state(cfg, rec['result_csv']) == 'complete'
+    rows = shard_rows(cfg)
+    assert rows[rows['result_csv'] == str(rec['result_csv'])]['status'].tolist() == ['complete']
+
+
+def test_still_unjudged_after_rejudge_saves_unjudged_row_and_raises(cfg, plan, monkeypatch):
+    monkeypatch.setattr('orthovac.evaluate._model_stats', fake_stats)
+    from orthovac.evaluate import baseline_csv
+    first = baseline_csv(cfg, plan.pairs[0].target)             # the first item of the shard
+    make_csv(first, scored=False)
+    ev, rj = FakeEval(), FakeRejudge(fill=False)
+    with pytest.raises(judge.JudgeIncomplete):
+        run_full(cfg, plan, ev, rj)
+    assert ev.calls == [] and len(rj.calls) == 1
+    assert shard_rows(cfg)['status'].tolist() == ['unjudged']
+
+
+def test_a_fatal_judge_error_stops_the_run_before_more_spend(cfg, plan, monkeypatch):
+    monkeypatch.setattr('orthovac.evaluate._model_stats', fake_stats)
+
+    class Poisoning(FakeEval):
+        async def __call__(self, cfg, ref, csv_path, label=''):
+            out = await super().__call__(cfg, ref, csv_path, label=label)
+            judge._FATAL = judge.JudgeQuotaError('quota')
+            return out
+
+    ev, rj = Poisoning(), FakeRejudge()
+    try:
+        with pytest.raises(judge.JudgeQuotaError):
+            run_full(cfg, plan, ev, rj)
+    finally:
+        judge.reset_fatal()
+    assert len(ev.calls) == 1 and rj.calls == []
+
+
+def test_rejudge_unjudged_repairs_only_unjudged_items(cfg, plan, monkeypatch):
+    monkeypatch.setattr('orthovac.evaluate._model_stats', fake_stats)
+    bad = [r for r in plan.matrix if float(r['strength']) in (0.5, 0.6)][:2]
+    for r in bad:
+        make_csv(r['result_csv'], scored=False)
+    other = next(r for r in plan.matrix if float(r['strength']) == 0.6 and r not in bad)
+    make_csv(other['result_csv'])
+    rj = FakeRejudge()
+    n = asyncio.run(runner.rejudge_unjudged(cfg, plan, rejudge_fn=rj, out=lambda *a: None))
+    assert n == 2 and sorted(rj.calls) == sorted(Path(r['result_csv']).name for r in bad)
+    assert all(judge.csv_state(cfg, r['result_csv']) == 'complete' for r in bad)
+
+
+def test_unjudged_local_is_copied_to_missing_drive_then_raises(cfg):
+    local = make_csv(cfg.local_responses / 'u.csv', scored=False)
+    drive = cfg.runs_root / 'x' / 'u.csv'
+    with pytest.raises(judge.JudgeIncomplete):
+        runner.finalize_eval(cfg, 'bma', 'rfa', 0.5, drive, local_csv=local, stats_fn=fake_stats)
+    assert durable.sha256(local) == durable.sha256(drive)
+    assert shard_rows(cfg)['status'].tolist() == ['unjudged']
+
+
+def test_unjudged_local_never_overwrites_a_complete_drive_file(cfg):
+    local = make_csv(cfg.local_responses / 'u.csv', scored=False)
+    drive = make_csv(cfg.runs_root / 'x' / 'u.csv')
+    before = durable.sha256(drive)
+    runner.finalize_eval(cfg, 'bma', 'rfa', 0.5, drive, local_csv=local, stats_fn=fake_stats)
+    assert durable.sha256(drive) == before
+
+
+def test_recover_local_uses_rank(cfg, plan):
+    rec = a_run(plan)
+    name = Path(rec['result_csv']).name
+    local = make_csv(cfg.local_responses / name, scored=False)
+    assert runner.recover_local(cfg, plan, out=lambda *a: None) == 1       # Drive has nothing
+    assert durable.sha256(local) == durable.sha256(rec['result_csv'])
+    make_csv(rec['result_csv'])                                           # Drive now complete
+    before = durable.sha256(rec['result_csv'])
+    assert runner.recover_local(cfg, plan, out=lambda *a: None) == 0
+    assert durable.sha256(rec['result_csv']) == before
+
+
+# ---- adapters: a truncated file is not "built" -----------------------------------------------------
+def write_adapter(d, valid_weights=True):
+    import numpy as np
+    from safetensors.numpy import save_file
+    d.mkdir(parents=True, exist_ok=True)
+    (d / 'adapter_config.json').write_text('{}')
+    w = d / 'adapter_model.safetensors'
+    save_file({'a': np.ones((64, 64), dtype='float32')}, str(w))
+    if not valid_weights:
+        w.write_bytes(w.read_bytes()[: w.stat().st_size // 2])
+    return w
+
+
+def test_adapter_complete_detects_truncation(tmp_path):
+    pytest.importorskip('safetensors')
+    w = write_adapter(tmp_path / 'ad')
+    assert runner.adapter_complete(tmp_path / 'ad')
+    w.write_bytes(w.read_bytes()[: w.stat().st_size // 2])
+    assert not runner.adapter_complete(tmp_path / 'ad')
+    assert not runner.adapter_complete(tmp_path / 'nothing')
+
+
+def test_adapter_complete_bin_uses_size_only(tmp_path):
+    d = tmp_path / 'b'
+    d.mkdir()
+    (d / 'adapter_model.bin').write_bytes(b'')
+    assert not runner.adapter_complete(d)
+    (d / 'adapter_model.bin').write_bytes(b'x')
+    assert runner.adapter_complete(d)
+
+
+def test_build_adapters_rebuilds_truncated_and_skips_valid(cfg, plan, monkeypatch):
+    pytest.importorskip('safetensors')
+    from orthovac import adapters
+    recs = runner.tasks.for_shard(cfg, plan.matrix)
+    bad, good = recs[0], recs[1]
+    write_adapter(Path(bad['adapter_dir']), valid_weights=False)
+    write_adapter(Path(good['adapter_dir']))
+    built = []
+
+    def fake_build(cfg_, source, target, mode, strength, force=False, verbose=False, record=None):
+        built.append(record['run_name'])
+        write_adapter(Path(record['adapter_dir']))
+
+    monkeypatch.setattr(adapters, 'build_projected_adapter', fake_build)
+    runner.build_adapters(cfg, plan, out=lambda *a: None)
+    assert bad['run_name'] in built and good['run_name'] not in built
+    assert runner.adapter_complete(bad['adapter_dir'])
+
+
+# ---- minors ---------------------------------------------------------------------------------------
+def test_non_qwen_side_is_refused(cfg):
+    import dataclasses
+    with pytest.raises(ValueError, match='Qwen tasks only'):
+        runner.load_plan(dataclasses.replace(cfg, side='Llama'), out=lambda *a: None)
+
+
+def test_write_task_status_uses_the_out_callback(cfg, plan):
+    lines = []
+    runner.write_task_status(plan.task_files, ['T001'], 'In progress', out=lines.append)
+    assert any('In progress' in s for s in lines)

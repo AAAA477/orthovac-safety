@@ -19,7 +19,11 @@ a missing file, bad JSON, or no open tasks stops the run.
 
 Open the notebook in two Colab sessions. Set `NUM_SHARDS = 2` in both, `SHARD = 0` in one and `SHARD = 1` in the
 other. Each run belongs to exactly one shard, each shard writes its own summary file, and neither writes the To_Do
-file. When both have finished, run the merge cell once.
+file. When both have finished, the `RUN_MERGE` session (`SHARD = 0`) runs the merge cell; only that session
+merges and syncs.
+
+Two sessions with the same `SHARD` double-spend the judge and GPU and corrupt each other's summary. Give every
+session a different `SHARD`.
 
 ## Nothing is lost
 
@@ -27,6 +31,8 @@ After every evaluation, before the next one starts: the CSV is copied to Drive a
 saved to the shard's summary file, and one line is appended to `runs/_log/shard<i>.jsonl`.
 If the judge's API fails (rate limit, quota), calls are retried; an exhausted quota stops the run with a clear
 message and the unjudged files are re-judged on the next run without regenerating.
+To repair unjudged files without regenerating, run `await ov.rejudge_unjudged(cfg, plan)`: it re-judges only
+this shard's unjudged or partly judged results (no GPU) and returns how many it fixed.
 
 ## Settings
 
