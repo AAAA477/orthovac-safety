@@ -166,7 +166,7 @@ async def run_evals(cfg, plan: Plan | None = None, eval_fn=None, ref_fn=None, re
                 waiting.append(item['label'])
                 out('  waiting for the baseline of this target (owned by another shard or not yet evaluated)')
                 continue
-        else:
+        elif csv_state(cfg, item['csv']) != 'complete':
             ref = item['ref'] if item['kind'] == 'baseline' else ref_fn(cfg, rec)
             if ref is None:
                 out('  adapter not built or uploaded yet - skipped (run build_adapters first)')

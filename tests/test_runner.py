@@ -168,3 +168,68 @@ def test_sync_status_tolerates_float_noise_in_strengths(cfg, tmp_path):
         make_csv(r['result_csv'])
     done, part = runner.sync_status(cfg, plan, out=lambda *a: None)
     assert done == ['T001']
+
+
+# ---- resume: finished work is skipped and still recorded ------------------------------------------
+def run_with(cfg, plan, ev, ref_fn, reuse_fn=lambda c, r: None, limit=None):
+    return asyncio.run(runner.run_evals(cfg, plan, eval_fn=ev, ref_fn=ref_fn, reuse_fn=reuse_fn,
+                                        limit=limit, out=lambda *a: None))
+
+
+def test_fresh_vm_resume_records_finished_result_without_hub_or_eval(cfg, plan, monkeypatch):
+    monkeypatch.setattr('orthovac.evaluate._model_stats', fake_stats)
+    done = next(r for r in plan.matrix if float(r['strength']) == 0.5)
+    make_csv(done['result_csv'])
+    ref_calls = []
+
+    def ref_fn(c, rec):
+        ref_calls.append(rec['run_name'])
+        return None                                             # adapter neither local nor on the Hub
+
+    ev = FakeEval()
+    run_with(cfg, plan, ev, ref_fn)
+    assert done['run_name'] not in ref_calls and done['run_name'] not in ev.calls
+    assert str(done['result_csv']) in shard_rows(cfg)['result_csv'].tolist()
+
+
+def test_limit_counts_real_work_only(cfg, plan, monkeypatch):
+    from orthovac.evaluate import baseline_csv
+    monkeypatch.setattr('orthovac.evaluate._model_stats', fake_stats)
+    make_csv(baseline_csv(cfg, plan.pairs[0].target))           # the first item is already finished
+    ev = FakeEval()
+    run_with(cfg, plan, ev, lambda c, r: 'ref', limit=1)
+    assert len(ev.calls) == 1
+    assert len(shard_rows(cfg)) == 2                            # the finished item and the one new eval
+
+
+# ---- lambda = 0 -----------------------------------------------------------------------------------
+def test_zero_strength_reuses_the_baseline_and_writes_a_row(cfg, plan, monkeypatch):
+    from orthovac import evaluate
+    monkeypatch.setattr('orthovac.evaluate._model_stats', fake_stats)
+    zero = next(r for r in plan.matrix if float(r['strength']) == 0.0)
+    ev = FakeEval()
+    run_with(cfg, plan, ev, lambda c, r: 'ref', reuse_fn=evaluate.reuse_zero_strength)
+    assert zero['run_name'] not in ev.calls                     # never evaluated: copied from the baseline
+    assert judge.csv_state(cfg, zero['result_csv']) == 'complete'
+    assert str(zero['result_csv']) in shard_rows(cfg)['result_csv'].tolist()
+
+
+def test_zero_strength_without_baseline_waits_and_writes_no_row(cfg, plan, monkeypatch):
+    monkeypatch.setattr('orthovac.evaluate._model_stats', fake_stats)
+    zero = next(r for r in plan.matrix if float(r['strength']) == 0.0)
+    waiting = run_with(cfg, plan, FakeEval(), lambda c, r: 'ref')       # reuse_fn returns None
+    assert waiting == [zero['run_name']]
+    assert str(zero['result_csv']) not in shard_rows(cfg)['result_csv'].tolist()
+
+
+def test_zero_strength_already_complete_is_recorded_and_run_done_sees_baseline(cfg, plan, monkeypatch):
+    from orthovac.evaluate import baseline_csv
+    monkeypatch.setattr('orthovac.evaluate._model_stats', fake_stats)
+    zero = next(r for r in plan.matrix if float(r['strength']) == 0.0)
+    assert not runner.run_done(cfg, zero)
+    make_csv(baseline_csv(cfg, zero['target']))
+    assert runner.run_done(cfg, zero)                           # baseline fallback
+    make_csv(zero['result_csv'])
+    waiting = run_with(cfg, plan, FakeEval(), lambda c, r: 'ref')
+    assert zero['run_name'] not in waiting
+    assert str(zero['result_csv']) in shard_rows(cfg)['result_csv'].tolist()
